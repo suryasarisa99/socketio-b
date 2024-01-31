@@ -3,6 +3,7 @@ const app = express();
 const server = require("http").createServer(app);
 const socket = require("socket.io");
 const cors = require("cors");
+require("dotenv").config();
 
 const corsOptions = {
   origin: ["http://localhost:4444", "http://192.168.0.169:4444"],
