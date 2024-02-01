@@ -4,54 +4,72 @@ const server = require("http").createServer(app);
 const socket = require("socket.io");
 const cors = require("cors");
 require("dotenv").config();
+const jwt = require("jsonwebtoken");
+const User = require("./models/User");
+const { connect } = require("mongoose");
 
 const corsOptions = {
-  origin: ["http://localhost:4444", "http://192.168.0.169:4444"],
+  origin: "*",
   methods: ["GET", "POST", "DELETE", "PUT"],
   headers: ["Content-Type", "Authorization"],
 };
-
+const MONGO_URI = `mongodb+srv://suryasarisa00:${process.env.MONGO_PASS}@surya.u197635.mongodb.net/mssgs?retryWrites=true&w=majority`;
+connect(MONGO_URI).then(() => {
+  console.log("connected to db");
+});
 app.use(cors(corsOptions));
 const io = socket(server, { cors: corsOptions });
-
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 const users = {};
 
 io.on("connection", (socket) => {
-  socket.on("signin", (data) => {
-    console.log("signin: ", data);
-    users[data.userId] = socket.id;
-    socket.broadcast.emit("userConnected", data.userId);
-    console.log("users: ", users);
-    const usersList = Object.keys(users).filter((id) => id !== data.userId);
+  // console.log("connected: ", socket.id);
+
+  socket.on("addMySocket", (data) => {
+    users[data.username] = socket.id;
+    socket.broadcast.emit("userConnected", data.username);
+    console.log("addMySocket: ", data.username);
+  });
+
+  socket.on("signin", async (data) => {
+    console.log(data);
+    const user = await User.findOne({
+      _id: data.username,
+      password: data.password,
+    });
+
+    try {
+      delete data.password;
+      delete user.password;
+    } catch (err) {
+      console.log(err);
+    }
+
+    if (!user)
+      return socket.emit("signinError", "Invalid username or password");
+
+    console.log("signin: ", data.username);
+    users[data.username] = socket.id;
+    const token = jwt.sign({ username: data.username }, process.env.JWT_SECRET);
+    socket.emit("token", token);
+
+    socket.broadcast.emit("userConnected", data.username);
+
+    const usersList = Object.keys(users).filter((id) => id !== data.username);
     socket.emit("users", usersList);
   });
 
   socket.on("mssg", (data) => {
     console.log("mssg: ", data);
     const receiverSocketId = users[data.receiverId];
-    console.log("=======================================================");
-    console.log("senderSocketId: ", socket.id);
-    console.log("receiverSocketId: ", receiverSocketId);
 
     if (receiverSocketId) {
-      console.log(
-        `message should be sent to ${data.receiverId} : ${receiverSocketId}  > ${data.message}`
-      );
       io.to(receiverSocketId).emit("message", {
         senderId: data.senderId,
         message: data.message,
       });
     }
-    console.log("=======================================================");
-
-    // socket.to(data.receiverId).emit("message", {
-    //   senderId: data.senderId,
-    //   message: data.message,
-    // });
-  });
-
-  socket.on("active", (userId) => {
-    socket.join(userId);
   });
 
   socket.on("disconnect", () => {
@@ -59,11 +77,43 @@ io.on("connection", (socket) => {
       (key) => users[key] === socket.id
     );
     if (disconnectedUser) {
+      socket.broadcast.emit("userDisconnected", disconnectedUser);
       console.log("disconnected user: ", disconnectedUser);
       delete users[disconnectedUser];
     } else {
-      console.warn("disconnected user not found: ", socket.id);
+      // console.error("disconnected user not found: ", socket.id);
     }
+  });
+});
+
+app.post("/signup", async (req, res) => {
+  const { name, password, username } = req.body;
+  console.log(req.body);
+  if (!name || !password || !username) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+  const prvUser = await User.findById(username);
+  if (prvUser) {
+    return res.status(400).json({ error: "User already exists" });
+  }
+
+  const user = new User({ name, password, _id: username });
+  await user.save();
+  res.json({ message: "User created successfully" });
+});
+
+app.post("/status", async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: "Invalid token" });
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) return res.status(400).json({ error: "Invalid token" });
+    const usersList = Object.keys(users).filter((id) => id !== user.username);
+    return res.json({
+      status: "success",
+      username: user.username,
+      users: usersList,
+    });
   });
 });
 
